@@ -133,6 +133,52 @@ quality gain (a bigger 1080p h264) worth that ongoing maintenance? Answer after 
 
 ---
 
+## How it would be implemented — and why it can't use one shared device
+
+### The only architecture that works: per-user runtime registration
+yt-dlp would have to **register a fresh device on each user's machine at first use** — i.e. do the
+`/service/2/device_register/` call locally, get a `device_id` + `iid` for *that* user, cache it, and
+sign subsequent `aweme/v1/...` calls (gorgon/khronos/ladon/argus) with it. Each user then looks like
+**one normal app install on one normal IP** — load is distributed, nothing is shared.
+
+### Why a single shared `iid` (baked into yt-dlp for everyone) does NOT work
+- **Open source = public credential.** Anything hardcoded in `tiktok.py` is on GitHub for all to see,
+  including TikTok. A shared `device_id`/`iid` is not a secret — it can be blocked instantly.
+- **One device, the whole world = textbook abuse → fast ban.** TikTok rate-limits per `device_id`.
+  A single ID hit from thousands of IPs at once is flagged as a bot farm in hours or less
+  (we already saw `ratelimit triggered` from unregistered probes).
+- **Single point of failure.** When that ID is banned, the feature breaks for **every** yt-dlp user
+  at once — then a new ID must be shipped in a release, only to be banned again. Endless.
+
+### Why tiktokdownloader.io / tikwm CAN do it (and yt-dlp can't copy them)
+
+| | tiktokdownloader.io / tikwm | yt-dlp |
+|---|---|---|
+| Runs on | their **own servers** (central) | **each user's machine** (decentralized) |
+| Devices | a **rotated pool** of many registered devices | one shared, or one-per-user |
+| IPs | their servers + **proxies** they control | each user's home IP |
+| Maintenance | **babysat 24/7**, re-register banned devices | only whatever ships in a release |
+| The IDs | server-side, **users never see them** | source is **public** |
+
+They run a **managed, rotating fleet** behind proxies and quietly re-register banned devices —
+server-side. yt-dlp is a standalone client with **no backend**: it can't host a device pool, can't
+proxy, can't centrally re-register. Making yt-dlp phone home to a central service would violate its
+"no backend / no tracking" design — maintainers won't do it.
+
+### The catch (why this still isn't done)
+Per-user registration is viable *only* if yt-dlp carries the registration algorithm itself —
+the ttencrypt body + gorgon/ladon/argus signing + the **current** `version_code` / `sig_hash` /
+region-host constants. TikTok **rotates those constantly** to break exactly this, so the code would
+need updating every few weeks, forever. That ongoing maintenance burden is the real reason yt-dlp's
+app path has been left broken ([#13134](https://github.com/yt-dlp/yt-dlp/issues/13134)) rather than
+chased.
+
+**One line:** a shared/personal single `iid` fails (public + single bannable point of failure);
+per-user runtime registration is the only design that works, but it forces yt-dlp to maintain a
+constantly-rotating signing/registration stack.
+
+---
+
 ## Files in this folder
 
 | File | Purpose |
