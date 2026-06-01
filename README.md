@@ -179,6 +179,42 @@ constantly-rotating signing/registration stack.
 
 ---
 
+## The only real solution (and it's fragile)
+
+There is no clever shortcut left: the only way to natively reach the mobile API is to
+**obtain TikTok's actual device-registration + request-signing algorithm** — the math behind
+`ttencrypt` (the `/device_register` body cipher, a.k.a. MSSDK/TTEncrypt) and the
+`x-gorgon` / `x-khronos` / `x-ladon` / `x-argus` headers (SM3 hashing + a Simon-cipher core +
+protobuf packing) — and reimplement it in **pure Python** inside yt-dlp.
+
+**Why it's inherently fragile:** TikTok rotates the algorithm, its constants, and the protobuf
+layout every few weeks specifically to break reimplementations. So any port is correct only until
+the next app update — it must be chased forever. (This is exactly why SignerPy/etc. constantly
+re-release, and why yt-dlp's app path is left dead, #13134.)
+
+### Sources for obtaining the algorithm
+
+The signing/registration code lives in TikTok's **native libraries**, not the Java/Kotlin layer.
+Realistic ways to extract or reproduce it:
+
+| Source / method | What you get | Notes / cost |
+|---|---|---|
+| **Reverse the Android `.so`** with Ghidra / IDA Pro / radare2-Cutter | The real algorithm. Target `libmetasec_ov.so` (modern "MetaSec"/byteaegis; also `libmetasec_ml.so`), older `libcms.so` / `libEncryptor.so`. Functions for argus/ladon/gorgon + ttencrypt | Hardest but authoritative. ARM disassembly; SM3 + Simon cipher + protobuf inside |
+| **Frida dynamic hooking** on a rooted device/emulator | Hook the native sign functions; log inputs/outputs or call them via RPC | Most **robust to rotation** — you use TikTok's *own* code instead of porting it. Needs a live device |
+| **AndroidNativeEmu** (e.g. "TT-MetaSec-AndroidEmu") | Runs the real `.so`'s ARM code inside a pure-Python emulator → emits headers without a phone | A middle ground; breaks when the `.so` changes / adds anti-emu checks |
+| **iOS app binary** | Same algorithm (byteaegis) in a Mach-O | Need a jailbroken device + `frida-ios-dump`/`dumpdecrypted` to strip FairPlay first. **Generally harder than Android** — prefer Android |
+| **APK static decompile** (jadx) | Request flow, param names, which native call maps to which header — not the math | Good for the *scaffolding* around the native calls |
+| **Existing open-source RE repos** | Ready-made implementations to read/port: [SignerPy](https://github.com/is-L7N/SignerPy), the various `TikTok-Encryption` / `x-ladon-x-argus` / AndroidNativeEmu projects | Quality/freshness varies; many lag the current app version; some are paid/gated |
+| **Network capture** (mitmproxy + Frida SSL-unpinning) | Ground-truth request/response pairs | Doesn't give the algorithm, but validates a reimplementation and reveals current params |
+
+**Why none of these is PR-acceptable as-is:** yt-dlp is **pure Python, no bundled binaries, no native
+deps, no Frida/emulator, no external/phone-home service**. So calling a `.so`, running an emulator, or
+depending on SignerPy is all off the table for mainline. The *only* mergeable form is a **clean-room
+pure-Python reimplementation** of the algorithm — which is precisely the part that rots every few
+weeks. That's the crux: technically possible, but a permanent maintenance commitment.
+
+---
+
 ## Files in this folder
 
 | File | Purpose |
