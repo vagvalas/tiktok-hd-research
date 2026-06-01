@@ -1,0 +1,3 @@
+SignerPy
+pycryptodome
+requests
